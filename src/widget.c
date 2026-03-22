@@ -84,6 +84,7 @@ struct blink_item {
     uint8_t color;
     uint16_t duration_ms;
     uint16_t sleep_ms;
+    bool persistent; // if true, keep LED on after blink (steady light)
 };
 
 // flag to indicate whether the initial boot up sequence is complete
@@ -91,6 +92,9 @@ static bool initialized = false;
 
 // track current color for persistent indicators (layer color)
 uint8_t led_current_color = 0;
+
+// flag to track if critical battery steady light is active
+static bool critical_steady_active = false;
 
 // low-level method to control the LED
 static void set_rgb_leds(uint8_t color, uint16_t duration_ms) {
@@ -220,8 +224,19 @@ void indicate_battery(void) {
         battery_level = zmk_battery_state_of_charge();
     };
 
-    blink.color = get_battery_color(battery_level);
-    k_msgq_put(&led_msgq, &blink, K_NO_WAIT);
+    // If critical level, use persistent (steady) light instead of blink
+    if (battery_level > 0 && battery_level <= CONFIG_RGBLED_WIDGET_BATTERY_LEVEL_CRITICAL) {
+        LOG_INF("Critical battery at boot (%d%%), enabling steady light", battery_level);
+        struct blink_item steady = {
+            .color = CONFIG_RGBLED_WIDGET_BATTERY_COLOR_CRITICAL,
+            .duration_ms = 0,
+            .persistent = true,
+        };
+        k_msgq_put(&led_msgq, &steady, K_NO_WAIT);
+    } else {
+        blink.color = get_battery_color(battery_level);
+        k_msgq_put(&led_msgq, &blink, K_NO_WAIT);
+    }
 #endif
 
 #if IS_ENABLED(CONFIG_RGBLED_WIDGET_BATTERY_SHOW_PERIPHERALS) ||                                   \
@@ -253,15 +268,28 @@ static int led_battery_listener_cb(const zmk_event_t *eh) {
         return 0;
     }
 
-    // check if we are in critical battery levels at state change, blink if we are
+    // check if we are in critical battery levels at state change
     uint8_t battery_level = as_zmk_battery_state_changed(eh)->state_of_charge;
 
     if (battery_level > 0 && battery_level <= CONFIG_RGBLED_WIDGET_BATTERY_LEVEL_CRITICAL) {
-        LOG_BATTERY(battery_level, CRITICAL);
-
-        struct blink_item blink = {.duration_ms = CONFIG_RGBLED_WIDGET_BATTERY_BLINK_MS,
-                                   .color = CONFIG_RGBLED_WIDGET_BATTERY_COLOR_CRITICAL};
-        k_msgq_put(&led_msgq, &blink, K_NO_WAIT);
+        LOG_INF("Critical battery level %d%%, enabling steady light", battery_level);
+        // Send persistent (steady) light item: duration_ms=0 means "set color and keep it"
+        struct blink_item steady = {
+            .color = CONFIG_RGBLED_WIDGET_BATTERY_COLOR_CRITICAL,
+            .duration_ms = 0,
+            .persistent = true,
+        };
+        k_msgq_put(&led_msgq, &steady, K_NO_WAIT);
+    } else if (battery_level > CONFIG_RGBLED_WIDGET_BATTERY_LEVEL_CRITICAL &&
+               critical_steady_active) {
+        // Battery recovered above critical: clear steady light
+        LOG_INF("Battery recovered above critical (%d%%), clearing steady light", battery_level);
+        struct blink_item clear = {
+            .color = 0,
+            .duration_ms = 0,
+            .persistent = false,
+        };
+        k_msgq_put(&led_msgq, &clear, K_NO_WAIT);
     }
     return 0;
 }
@@ -366,9 +394,22 @@ extern void led_process_thread(void *d0, void *d1, void *d2) {
         // wait until a blink item is received and process it
         struct blink_item blink;
         k_msgq_get(&led_msgq, &blink, K_FOREVER);
-        if (blink.duration_ms > 0) {
+
+        if (blink.persistent) {
+            // Persistent (steady) light: set color and keep it on indefinitely
+            LOG_DBG("Got a persistent (steady) item from msgq, color %d", blink.color);
+            critical_steady_active = (blink.color != 0);
+            set_rgb_leds(blink.color, 0);
+            led_layer_color = 0; // override layer color while critical is active
+        } else if (blink.duration_ms > 0) {
             LOG_DBG("Got a blink item from msgq, color %d, duration %d", blink.color,
                     blink.duration_ms);
+
+            // If critical steady light is active, skip non-critical blinks
+            if (critical_steady_active) {
+                LOG_DBG("Critical steady active, skipping blink");
+                continue;
+            }
 
             // Blink the leds, using a separation blink if necessary
             if (blink.color == led_current_color && blink.color > 0) {
@@ -384,7 +425,10 @@ extern void led_process_thread(void *d0, void *d1, void *d2) {
 
         } else {
             LOG_DBG("Got a layer color item from msgq, color %d", blink.color);
-            set_rgb_leds(blink.color, 0);
+            // Only update layer color if critical steady is not active
+            if (!critical_steady_active) {
+                set_rgb_leds(blink.color, 0);
+            }
         }
     }
 }
