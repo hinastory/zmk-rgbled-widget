@@ -3,6 +3,7 @@
 #include <zephyr/drivers/led.h>
 #include <zephyr/init.h>
 #include <zephyr/kernel.h>
+#include <zephyr/settings/settings.h>
 
 #include <zmk/battery.h>
 #include <zmk/ble.h>
@@ -48,7 +49,10 @@ static const char *color_names[] = {"black", "red",     "green", "yellow",
                                     "blue",  "magenta", "cyan",  "white"};
 
 #if SHOW_LAYER_COLORS
-static const uint8_t layer_color_idx[] = {
+/* Not const: ZMK Studio edits these at runtime through
+ * zmk_rgbled_widget_set_layer_color(). The Kconfig values are the defaults,
+ * overwritten by whatever was saved to settings on the last edit. */
+static uint8_t layer_color_idx[] = {
     CONFIG_RGBLED_WIDGET_LAYER_0_COLOR,  CONFIG_RGBLED_WIDGET_LAYER_1_COLOR,
     CONFIG_RGBLED_WIDGET_LAYER_2_COLOR,  CONFIG_RGBLED_WIDGET_LAYER_3_COLOR,
     CONFIG_RGBLED_WIDGET_LAYER_4_COLOR,  CONFIG_RGBLED_WIDGET_LAYER_5_COLOR,
@@ -311,6 +315,52 @@ void update_layer_color(void) {
         k_msgq_put(&led_msgq, &color, K_NO_WAIT);
     }
 }
+
+/* Studio reads and writes layer colours through these two. Without them the
+ * firmware does not link at all when SHOW_LAYER_COLORS is on, which is why
+ * the feature had been switched off rather than used. */
+uint8_t zmk_rgbled_widget_get_layer_color(uint8_t layer) {
+    if (layer >= ARRAY_SIZE(layer_color_idx)) {
+        return 0;
+    }
+    return layer_color_idx[layer];
+}
+
+static int layer_colors_save(void) {
+    return settings_save_one("rgbled/layer_colors", layer_color_idx, sizeof(layer_color_idx));
+}
+
+void zmk_rgbled_widget_set_layer_color(uint8_t layer, uint8_t color) {
+    if (layer >= ARRAY_SIZE(layer_color_idx) || color >= ARRAY_SIZE(color_names)) {
+        LOG_WRN("Ignoring layer colour %d for layer %d: out of range", color, layer);
+        return;
+    }
+    layer_color_idx[layer] = color;
+    LOG_INF("Layer %d colour set to %s", layer, color_names[color]);
+
+    int ret = layer_colors_save();
+    if (ret < 0) {
+        LOG_ERR("Failed to persist layer colours: %d", ret);
+    }
+
+    /* Repaint if the layer being recoloured is the one showing. */
+    update_layer_color();
+}
+
+static int layer_colors_settings_set(const char *name, size_t len, settings_read_cb read_cb,
+                                     void *cb_arg) {
+    if (!settings_name_steq(name, "layer_colors", NULL)) {
+        return -ENOENT;
+    }
+    /* A shorter blob just means fewer layers were stored; take what fits and
+     * leave the rest at their Kconfig defaults. */
+    size_t take = len < sizeof(layer_color_idx) ? len : sizeof(layer_color_idx);
+    int rc = read_cb(cb_arg, layer_color_idx, take);
+    return rc >= 0 ? 0 : rc;
+}
+
+SETTINGS_STATIC_HANDLER_DEFINE(rgbled_layer_colors, "rgbled", NULL, layer_colors_settings_set, NULL,
+                               NULL);
 
 static int led_layer_color_listener_cb(const zmk_event_t *eh) {
     struct zmk_activity_state_changed *ev = as_zmk_activity_state_changed(eh);
