@@ -204,6 +204,10 @@ static inline uint8_t get_battery_color(uint8_t battery_level) {
                 color_names[CONFIG_RGBLED_WIDGET_BATTERY_COLOR_MISSING]);
         return CONFIG_RGBLED_WIDGET_BATTERY_COLOR_MISSING;
     }
+    if (battery_level >= CONFIG_RGBLED_WIDGET_BATTERY_LEVEL_FULL) {
+        LOG_BATTERY(battery_level, FULL);
+        return CONFIG_RGBLED_WIDGET_BATTERY_COLOR_FULL;
+    }
     if (battery_level >= CONFIG_RGBLED_WIDGET_BATTERY_LEVEL_HIGH) {
         LOG_BATTERY(battery_level, HIGH);
         return CONFIG_RGBLED_WIDGET_BATTERY_COLOR_HIGH;
@@ -212,8 +216,12 @@ static inline uint8_t get_battery_color(uint8_t battery_level) {
         LOG_BATTERY(battery_level, MEDIUM);
         return CONFIG_RGBLED_WIDGET_BATTERY_COLOR_MEDIUM;
     }
-    LOG_BATTERY(battery_level, LOW);
-    return CONFIG_RGBLED_WIDGET_BATTERY_COLOR_LOW;
+    if (battery_level >= CONFIG_RGBLED_WIDGET_BATTERY_LEVEL_VERYLOW) {
+        LOG_BATTERY(battery_level, LOW);
+        return CONFIG_RGBLED_WIDGET_BATTERY_COLOR_LOW;
+    }
+    LOG_BATTERY(battery_level, VERYLOW);
+    return CONFIG_RGBLED_WIDGET_BATTERY_COLOR_VERYLOW;
 }
 
 void indicate_battery(void) {

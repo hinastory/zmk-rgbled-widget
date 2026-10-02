@@ -44,6 +44,32 @@ config RGBLED_WIDGET_BATTERY_BLINK_MS
     int "Duration of battery level blink in ms"
     default 2000
 
+config RGBLED_WIDGET_BATTERY_LEVEL_FULL
+    int "Battery level considered full"
+    range 0 101
+    default 101
+    help
+      At or above this the FULL colour is used. 101 is out of reach for a
+      percentage, so leaving it alone keeps the three bands this had before.
+
+config RGBLED_WIDGET_BATTERY_COLOR_FULL
+    int "Colour at or above LEVEL_FULL"
+    range 0 7
+    default $(COLOR_GREEN)
+
+config RGBLED_WIDGET_BATTERY_LEVEL_VERYLOW
+    int "Battery level below which the VERYLOW colour is used"
+    range 0 100
+    default 0
+    help
+      Zero means every remaining level takes the LOW colour, which is what
+      this did before the band existed.
+
+config RGBLED_WIDGET_BATTERY_COLOR_VERYLOW
+    int "Colour below LEVEL_VERYLOW"
+    range 0 7
+    default $(COLOR_RED)
+
 config RGBLED_WIDGET_BATTERY_LEVEL_HIGH
     int "High battery level percentage"
     default 80
